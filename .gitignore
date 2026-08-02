@@ -1,0 +1,36 @@
+# NOTE: the dataset (train/, Test_NoisyLR/, *.npy) is intentionally committed.
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# ---- Virtualenvs (ml_venv lives in the parent dir; ignore any local one too) ----
+.venv/
+venv/
+env/
+
+# ---- Model checkpoints & full training state (regenerable; large; written live) ----
+*.pt
+*.pth
+*.ckpt
+
+# ---- Logs & run artifacts ----
+*.log
+
+# ---- Predictions / eval output dirs ----
+outputs/
+outputs*/
+preds/
+predictions/
+
+# ---- Claude Code local state (machine-specific, not project source) ----
+.claude/
+.remember/
+.superpowers/
+
+# ---- OS cruft ----
+.DS_Store
+Thumbs.db
+__MACOSX/
