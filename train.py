@@ -126,10 +126,10 @@ def main():
         model.train()
         run = 0.0
         n_batches = 0
+        n_skipped = 0
         for bi, batch in enumerate(tqdm(train_loader, desc=f"epoch {epoch+1}/{cfg.num_epochs}")):
             if args.max_iters is not None and bi >= args.max_iters:
                 break
-            n_batches += 1
             x = batch["input"].to(device, memory_format=torch.channels_last)
             t = batch["target"].to(device)
             lL = batch["log_L"].to(device)
@@ -137,6 +137,12 @@ def main():
             with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == "cuda")):
                 pred = model(x, lL if cfg.film_enabled else None)
                 loss, _ = crit(pred, t)
+            # A non-finite loss would push NaN gradients past grad-clip and
+            # permanently poison the weights + EMA. Skip the batch instead.
+            if not torch.isfinite(loss):
+                n_skipped += 1
+                continue
+            n_batches += 1
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             opt.step()
@@ -145,7 +151,8 @@ def main():
         sched.step()
 
         agg, per_bin = validate(ema.shadow, val_loader, device, max_val=args.max_val)
-        print(f"epoch {epoch+1}: train_loss={run/max(1,n_batches):.4f} val_SSIM={agg:.4f}")
+        skip_note = f" (skipped {n_skipped} non-finite)" if n_skipped else ""
+        print(f"epoch {epoch+1}: train_loss={run/max(1,n_batches):.4f} val_SSIM={agg:.4f}{skip_note}")
         print(f"  per-bin SSIM: {per_bin}")     # PC1/PC2 strata, never only aggregate
         if agg > best:
             best = agg

@@ -42,7 +42,12 @@ class CombinedLoss(nn.Module):
                 p.requires_grad_(False)
 
     def forward(self, pred_log, target_log):
-        pred = _exp(pred_log); target = _exp(target_log)
+        # Clamp to the model's declared output range [0,1] BEFORE Charbonnier.
+        # Without this the linear value is unbounded (exp(30)~1e13): a single
+        # large log prediction sends the loss non-finite, NaN gradients slip
+        # past grad-clip, and the run diverges. SSIM/LPIPS already clamp.
+        pred = _exp(pred_log).clamp(0, 1)
+        target = _exp(target_log).clamp(0, 1)
         char = torch.sqrt((pred - target) ** 2 + self.eps ** 2).mean()
         s = 1.0 - ssim(pred, target)
         total = self.cfg.charbonnier_weight * char + self.cfg.ssim_weight * s
