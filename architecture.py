@@ -8,25 +8,47 @@ def _simple_gate(x):
     return a * b
 
 
+class LayerNorm2d(nn.Module):
+    """Per-pixel channel-wise LayerNorm (as in the original NAFNet). Without this,
+    ~20 stacked un-normalized residual blocks let activations grow unboundedly once
+    beta/gamma move off their zero-init -- verified directly: on an extreme-dynamic-
+    range crop, backbone.downs.0 hit max|act|=1.6e8 and every block past it went NaN
+    under bf16. LN bounds the scale each block sees regardless of upstream growth."""
+    def __init__(self, channels, eps=1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(channels))
+        self.bias = nn.Parameter(torch.zeros(channels))
+        self.eps = eps
+
+    def forward(self, x):
+        mu = x.mean(dim=1, keepdim=True)
+        var = x.var(dim=1, keepdim=True, unbiased=False)
+        y = (x - mu) / torch.sqrt(var + self.eps)
+        return y * self.weight[None, :, None, None] + self.bias[None, :, None, None]
+
+
 class NAFBlock(nn.Module):
     def __init__(self, channels: int, film_max_c: int = None, expand: int = 2):
         super().__init__()
         self.channels = channels
         dw = channels * expand                       # expanded width (even)
-        # --- token mixer: pointwise -> depthwise -> SimpleGate -> SCA -> pointwise ---
+        # --- token mixer: LN -> pointwise -> depthwise -> SimpleGate -> SCA -> pointwise ---
+        self.norm1 = LayerNorm2d(channels)
         self.conv1 = nn.Conv2d(channels, dw, 1)
         self.conv2 = nn.Conv2d(dw, dw, 3, padding=1, groups=dw)     # depthwise (cheap)
         self.conv3 = nn.Conv2d(dw // 2, channels, 1)                # after SimpleGate: dw -> dw//2
         self.sca = nn.Sequential(nn.AdaptiveAvgPool2d(1), nn.Conv2d(dw // 2, dw // 2, 1))
-        # --- channel mixer (FFN): pointwise -> SimpleGate -> pointwise ---
+        # --- channel mixer (FFN): LN -> pointwise -> SimpleGate -> pointwise ---
         ffn = channels * expand
+        self.norm2 = LayerNorm2d(channels)
         self.conv4 = nn.Conv2d(channels, ffn, 1)
         self.conv5 = nn.Conv2d(ffn // 2, channels, 1)               # after SimpleGate
         self.beta = nn.Parameter(torch.zeros(1, channels, 1, 1))
         self.gamma = nn.Parameter(torch.zeros(1, channels, 1, 1))
 
     def forward(self, x, film=None):
-        y = self.conv1(x)
+        y = self.norm1(x)
+        y = self.conv1(y)
         y = self.conv2(y)
         y = _simple_gate(y)                          # -> dw//2 channels
         y = y * self.sca(y)
@@ -36,7 +58,8 @@ class NAFBlock(nn.Module):
             c = self.channels
             y = y * (1.0 + scale_full[:, :c, None, None]) + shift_full[:, :c, None, None]
         x = x + self.beta * y                        # residual 1
-        z = self.conv4(x)
+        z = self.norm2(x)
+        z = self.conv4(z)
         z = _simple_gate(z)                          # -> ffn//2 channels
         z = self.conv5(z)
         return x + self.gamma * z                    # residual 2

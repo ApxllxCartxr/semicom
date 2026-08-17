@@ -2,7 +2,6 @@ import argparse, copy, os
 import numpy as np
 import torch
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 
 from config import Config, arch_meta, apply_arch
@@ -102,7 +101,13 @@ def main():
           f"(expand={cfg.naf_block_expand}, film={cfg.film_enabled}, lpips_w={cfg.lpips_weight})")
     ema = EMA(model, cfg.ema_decay)
     opt = AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-    sched = CosineAnnealingLR(opt, cfg.num_epochs)
+    sched = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        opt, T_0=cfg.restart_period_epochs, T_mult=cfg.restart_mult, eta_min=cfg.lr_min)
+    warmup = None
+    if cfg.warmup_iters > 0:
+        warmup = torch.optim.lr_scheduler.LinearLR(
+            opt, start_factor=0.05, total_iters=cfg.warmup_iters)
+    gstep = 0
     crit = CombinedLoss(cfg).to(device)
 
     best = -1.0
@@ -142,12 +147,23 @@ def main():
             if not torch.isfinite(loss):
                 n_skipped += 1
                 continue
-            n_batches += 1
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+            # clip_grad_norm_ returns the PRE-clip total norm. If any grad is
+            # non-finite that norm is NaN, and the clip scales EVERY parameter's
+            # gradient by NaN -- one bad batch permanently kills the model and
+            # the EMA. A finite loss does not imply finite grads, so check here.
+            gnorm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+            if not torch.isfinite(gnorm):
+                opt.zero_grad(set_to_none=True)
+                n_skipped += 1
+                continue
+            n_batches += 1
             opt.step()
             ema.update(model)
             run += loss.item()
+            if warmup is not None and gstep < cfg.warmup_iters:
+                warmup.step()
+            gstep += 1
         sched.step()
 
         agg, per_bin = validate(ema.shadow, val_loader, device, max_val=args.max_val)

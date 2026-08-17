@@ -163,7 +163,8 @@ class ValDataset(Dataset):
 def make_train_loader(cfg, ds: "TrainDataset", pc1_train: np.ndarray) -> DataLoader:
     thr = np.percentile(pc1_train, 90)                 # top decile
     weights = np.where(pc1_train >= thr, cfg.pc1_oversample_strength, 1.0).astype(np.float64)
-    sampler = WeightedRandomSampler(weights, num_samples=len(ds), replacement=True)
+    sampler = WeightedRandomSampler(weights, num_samples=len(ds) * cfg.crops_per_image,
+                                    replacement=True)
     return DataLoader(ds, batch_size=cfg.batch_size, sampler=sampler,
                       num_workers=cfg.num_workers, pin_memory=True, drop_last=True)
 

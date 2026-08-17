@@ -31,7 +31,7 @@ class Config:
     synth_prob: float = 0.5                           # P(use re-degradation) per sample; else real pair
     gaussian_prob: float = 0.1                        # low-prob Gaussian hedge subset
     gaussian_sigma_range: Tuple[float, float] = (0.5 / 255, 2.0 / 255)  # in 0-1 units
-    crop_gt_256: int = 128                            # GT crop when GT is 256 -> LR crop 64
+    crop_gt_256: int = 192                            # GT crop when GT is 256 -> LR crop 96 (LayerNorm now bounds activations, safe to widen)
     crop_gt_512: int = 256                            # GT crop when GT is 512 -> LR crop 128
     l_range_margin: float = 0.10                      # extend sampled L range 10% beyond observed
     pc1_oversample_strength: float = 1.5              # ABLATION TOGGLE (1.0 = off)
@@ -40,16 +40,22 @@ class Config:
     # ---- Loss ----
     charbonnier_weight: float = 1.0
     charbonnier_eps: float = 1e-3
-    ssim_weight: float = 0.3
+    ssim_weight: float = 0.6       # eval metric is SSIM; was 0.3 -> underweighted vs Charbonnier
+    log_char_weight: float = 0.2   # relative-error term; trains the dark tail (was 0.5 -> too aggressive, fed SSIM denom instability)
     lpips_weight: float = 0.05                        # DO NOT tune up
 
     # ---- Optimization ----
     lr: float = 2e-4
+    lr_min: float = 1e-6
+    warmup_iters: int = 500
+    restart_period_epochs: int = 15   # cosine warm-restart cycle length (SGDR)
+    restart_mult: int = 1             # cycle length multiplier after each restart
     weight_decay: float = 1e-4
     num_epochs: int = 100
+    crops_per_image: int = 4       # sampler draws 4x len(ds)/epoch -> 4x optimizer steps
     grad_clip: float = 1.0
     ema_decay: float = 0.999
-    batch_size: int = 16
+    batch_size: int = 8
     num_workers: int = 8
     seed: int = 0
 
